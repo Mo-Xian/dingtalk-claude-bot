@@ -9,6 +9,20 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 
 const currentLevel: LogLevel = 'DEBUG';
 
+const LOG_DIR = 'logs';
+const LOG_FILE = `${LOG_DIR}/bot_${new Date().toISOString().slice(0, 10)}.log`;
+
+// 确保日志目录存在
+import * as fs from 'fs';
+if (!fs.existsSync(LOG_DIR)) {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+}
+
+// 写入日志文件
+function writeLog(content: string): void {
+  fs.appendFileSync(LOG_FILE, content + '\n');
+}
+
 function formatTimestamp(): string {
   return new Date().toISOString();
 }
@@ -19,11 +33,15 @@ function log(level: LogLevel, prefix: string, message: string, data?: any): void
   const timestamp = formatTimestamp();
   const prefix_str = `[${timestamp}] [${level}] [${prefix}]`;
 
+  let logLine: string;
   if (data !== undefined) {
-    console.log(`${prefix_str} ${message}`, data);
+    logLine = `${prefix_str} ${message} ${JSON.stringify(data)}`;
   } else {
-    console.log(`${prefix_str} ${message}`);
+    logLine = `${prefix_str} ${message}`;
   }
+
+  console.log(logLine);
+  writeLog(logLine);
 }
 
 export const logger = {

@@ -29,7 +29,15 @@ interface ClaudeStreamEvent {
   type: string;
   subtype?: string;
   message?: {
-    content?: Array<{ type: string; text?: string }>;
+    content?: Array<{
+      type: string;
+      text?: string;
+      name?: string;
+      input?: Record<string, any>;
+      tool_use_id?: string;
+      content?: string;
+      is_error?: boolean;
+    }>;
   };
   content?: string;
   text?: string;
@@ -200,8 +208,8 @@ export class ClaudeClient {
     // 优先使用 shared sessionId（如果存在且没有错误）
     const sharedSessId = this.sharedSessionId;
     let currentSessId = sharedSessId || '';
-    const sharedProc = this.processes.get(sharedSessId);
-    const sharedError = this.sessionErrors.get(sharedSessId);
+    const sharedProc = this.processes.get(currentSessId);
+    const sharedError = this.sessionErrors.get(currentSessId);
 
     if (!sharedProc || sharedError) {
       // shared 进程不存在或有问题，使用 conversationId 生成 sessionId
@@ -500,6 +508,10 @@ export class ClaudeClient {
       this.updateSessionStatus(sessId, 'stopping');
       return new Promise<void>((resolve) => {
         const pid = proc.pid;
+        if (!pid) {
+          resolve();
+          return;
+        }
         // 使用 taskkill /T 杀整个进程树（包括 bash 和 claude 子进程）
         spawn('taskkill', ['/F', '/T', '/PID', pid.toString()], { shell: true });
         // 等待进程退出，最多 3 秒

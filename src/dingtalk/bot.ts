@@ -144,8 +144,8 @@ export class DingTalkBot {
             totalResponseLength: fullResponse.length,
           });
 
-          // 每5个chunk或最后一块才更新，避免频繁更新
-          if (outTrackId && (chunkCount % 5 === 0 || chunk.length < 50)) {
+          // 每次都更新，确保内容实时同步到钉钉
+          if (outTrackId) {
             await this.dingtalk.updateCard(conversationId, fullResponse, false);
           }
         },

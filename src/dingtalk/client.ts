@@ -265,7 +265,7 @@ export class DingTalkClient {
           guid: guid,
           key: 'content',
           content: content,
-          isFull: isFinal,
+          isFull: true,  // 始终设为 true，确保每次都完整渲染
           isFinalize: isFinal,
           isError: false,
         },
