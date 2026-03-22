@@ -86,6 +86,55 @@ src/
 | `DINGTALK_CLIENT_SECRET` | DingTalk app client secret | Yes |
 | `PORT` | Server port (default: 3000) | No |
 
+## DingTalk Card Configuration
+
+The bot uses DingTalk interactive cards for message display with streaming updates.
+
+### Initial Card Template
+
+```typescript
+{
+  msgType: 'interactive',
+  card: {
+    header: {
+      title: {
+        tag: 'plainText',
+        content: 'Claude AI Assistant',  // customizable
+      },
+      avatar: 'https://cdn-icons-png.flaticon.com/512/5693/5693025.png',
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: options.content,  // AI response content
+      },
+    ],
+  },
+}
+```
+
+### Streaming Update Template
+
+```typescript
+{
+  card: {
+    elements: [
+      {
+        tag: 'markdown',
+        content: content,  // incrementally updated content
+      },
+    ],
+  },
+}
+```
+
+### Customization
+
+Modify the following in `src/dingtalk/card.ts`:
+- `header.title.content` - Card title
+- `header.avatar` - Card icon URL
+- `card.theme` - Card theme color
+
 ## License
 
 MIT

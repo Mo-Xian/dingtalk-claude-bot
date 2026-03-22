@@ -86,6 +86,55 @@ src/
 | `DINGTALK_CLIENT_SECRET` | 钉钉应用 Client Secret | 是 |
 | `PORT` | 服务器端口（默认：3000） | 否 |
 
+## 钉钉卡片配置
+
+机器人使用钉钉互动卡片模板进行消息展示，支持流式更新。
+
+### 初始卡片模板
+
+```typescript
+{
+  msgType: 'interactive',
+  card: {
+    header: {
+      title: {
+        tag: 'plainText',
+        content: 'Claude AI Assistant',  // 可自定义
+      },
+      avatar: 'https://cdn-icons-png.flaticon.com/512/5693/5693025.png',
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: options.content,  // AI 回复内容
+      },
+    ],
+  },
+}
+```
+
+### 流式更新模板
+
+```typescript
+{
+  card: {
+    elements: [
+      {
+        tag: 'markdown',
+        content: content,  // 增量更新的内容
+      },
+    ],
+  },
+}
+```
+
+### 自定义配置
+
+修改 `src/dingtalk/card.ts` 中的以下内容：
+- `header.title.content` - 卡片标题
+- `header.avatar` - 卡片图标 URL
+- `card.theme` - 卡片主题色
+
 ## 开源协议
 
 MIT
