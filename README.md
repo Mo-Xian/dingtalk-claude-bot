@@ -84,6 +84,7 @@ src/
 |----------|-------------|----------|
 | `DINGTALK_CLIENT_ID` | 钉钉应用 Client ID | 是 |
 | `DINGTALK_CLIENT_SECRET` | 钉钉应用 Client Secret | 是 |
+| `DINGTALK_CARD_TEMPLATE_ID` | 钉钉卡片模板 ID（默认：ed526bd...） | 否 |
 | `PORT` | 服务器端口（默认：3000） | 否 |
 
 ## 钉钉卡片配置

@@ -84,6 +84,7 @@ src/
 |----------|-------------|----------|
 | `DINGTALK_CLIENT_ID` | DingTalk app client ID | Yes |
 | `DINGTALK_CLIENT_SECRET` | DingTalk app client secret | Yes |
+| `DINGTALK_CARD_TEMPLATE_ID` | DingTalk card template ID (default: ed526bd...) | No |
 | `PORT` | Server port (default: 3000) | No |
 
 ## DingTalk Card Configuration

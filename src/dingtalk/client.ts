@@ -8,8 +8,8 @@ interface StreamClientOptions {
   secret: string;
 }
 
-// AI 卡片模板 ID
-const CARD_TEMPLATE_ID = 'ed5262bd-f1d2-4def-ae1e-249c6cb5643a.schema';
+// AI 卡片模板 ID（从环境变量读取）
+const CARD_TEMPLATE_ID = process.env.DINGTALK_CARD_TEMPLATE_ID || 'ed5262bd-f1d2-4def-ae1e-249c6cb5643a.schema';
 
 export class DingTalkClient {
   private clientId: string;
