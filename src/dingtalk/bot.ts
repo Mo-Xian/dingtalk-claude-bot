@@ -2,9 +2,13 @@ import type { DingTalkClient } from './client.js';
 import type { ClaudeClient } from '../claude/client.js';
 import { logger } from '../logger.js';
 
-const MAX_HISTORY_MESSAGES = 50; // 每个会话最多保留的消息数
-const DEDUP_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 分钟清理一次去重 Map
-const DEDUP_TTL = 2 * 60 * 1000; // 消息去重有效期 2 分钟
+const MAX_HISTORY_MESSAGES = 50;
+const DEDUP_CLEANUP_INTERVAL = 5 * 60 * 1000;
+const DEDUP_TTL = 2 * 60 * 1000;
+
+// 卡片更新配置
+const CARD_UPDATE_INTERVAL = 500;    // 防抖间隔：500ms
+const MAX_CARD_CONTENT = 8000;       // 卡片内容最大字符数
 
 interface Message {
   role: 'user' | 'assistant';
@@ -24,7 +28,7 @@ export class DingTalkBot {
   private dingtalk: DingTalkClient;
   private claude: ClaudeClient;
   private conversations: Map<string, Conversation> = new Map();
-  private processingMessages: Map<string, number> = new Map(); // msgUid -> timestamp
+  private processingMessages: Map<string, number> = new Map();
   private initialized: boolean = false;
   private dedupCleanupTimer?: ReturnType<typeof setInterval>;
 
@@ -32,13 +36,11 @@ export class DingTalkBot {
     this.dingtalk = dingtalk;
     this.claude = claude;
 
-    // 定期清理过期的去重记录
     this.dedupCleanupTimer = setInterval(() => {
       this.cleanupProcessingMessages();
     }, DEDUP_CLEANUP_INTERVAL);
   }
 
-  // 清理过期的去重记录
   private cleanupProcessingMessages(): void {
     const now = Date.now();
     let cleaned = 0;
@@ -63,7 +65,6 @@ export class DingTalkBot {
     if (this.initialized) return true;
 
     logger.info('DingTalk-Bot', 'Pre-initializing Claude CLI...');
-
     const success = await this.claude.createSharedProcess();
 
     if (success) {
@@ -78,6 +79,19 @@ export class DingTalkBot {
 
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  // 截断过长的卡片内容，保留开头提示和最新内容
+  private truncateCardContent(content: string): string {
+    if (content.length <= MAX_CARD_CONTENT) return content;
+
+    const truncateNotice = '\n\n> ⚠️ *内容过长，已截断前部分*\n\n---\n\n';
+    const keepEnd = MAX_CARD_CONTENT - truncateNotice.length;
+    // 从后往前找一个换行符作为截断点，避免切断 markdown
+    const tail = content.substring(content.length - keepEnd);
+    const firstNewline = tail.indexOf('\n');
+    const cleanTail = firstNewline > 0 ? tail.substring(firstNewline + 1) : tail;
+    return truncateNotice + cleanTail;
   }
 
   async handleMessage(
@@ -118,7 +132,6 @@ export class DingTalkBot {
 
       conversation.messages.push(userMessage);
 
-      // 限制会话历史长度
       if (conversation.messages.length > MAX_HISTORY_MESSAGES) {
         conversation.messages = conversation.messages.slice(-MAX_HISTORY_MESSAGES);
       }
@@ -137,33 +150,59 @@ export class DingTalkBot {
 
       logger.info('DingTalk-Bot', '>>> Calling Claude Code', {
         conversationId,
-        messageCount: conversation.messages.length,
         latestMessage: text.substring(0, 100),
       });
 
       let fullResponse = '';
-      let chunkCount = 0;
+      let lastSentContent = '';   // 上次发送到卡片的内容
       let isComplete = false;
+      let updateTimer: ReturnType<typeof setInterval> | null = null;
+      let isUpdating = false;     // 防止并发更新
 
-      // Claude CLI 通过 session-id 维护上下文，只发送最新消息
+      // 防抖卡片更新：每 500ms 检查内容是否变化，变化则更新
+      const startCardUpdater = () => {
+        if (!outTrackId) return;
+        updateTimer = setInterval(async () => {
+          if (isUpdating || isComplete) return;
+          const currentContent = this.truncateCardContent(fullResponse);
+          if (currentContent === lastSentContent) return;
+
+          isUpdating = true;
+          try {
+            await this.dingtalk.updateCard(conversationId, currentContent, false);
+            lastSentContent = currentContent;
+            logger.debug('DingTalk-Bot', 'Card updated (debounced)', {
+              conversationId,
+              contentLength: currentContent.length,
+            });
+          } catch (e: any) {
+            logger.error('DingTalk-Bot', 'Card update failed', { error: e.message });
+          } finally {
+            isUpdating = false;
+          }
+        }, CARD_UPDATE_INTERVAL);
+      };
+
+      // 停止定时器并做最终更新
+      const stopCardUpdater = async () => {
+        if (updateTimer) {
+          clearInterval(updateTimer);
+          updateTimer = null;
+        }
+        // 等待进行中的更新完成
+        while (isUpdating) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      };
+
+      startCardUpdater();
+
       await this.claude.streamMessage({
         messages: [{ role: 'user', content: text }],
         onChunk: async (chunk: string) => {
           if (isComplete) return;
-
-          chunkCount++;
+          // 只累积文本，不直接调 API（由定时器统一更新）
           fullResponse += chunk;
-
-          logger.debug('DingTalk-Bot', '<<< Claude chunk', {
-            conversationId,
-            chunkNumber: chunkCount,
-            chunkLength: chunk.length,
-            totalResponseLength: fullResponse.length,
-          });
-
-          if (outTrackId) {
-            await this.dingtalk.updateCard(conversationId, fullResponse, false);
-          }
         },
         onComplete: async () => {
           if (isComplete) return;
@@ -171,7 +210,6 @@ export class DingTalkBot {
 
           logger.info('DingTalk-Bot', '>>> Claude Code streaming completed', {
             conversationId,
-            totalChunks: chunkCount,
             totalResponseLength: fullResponse.length,
             responsePreview: fullResponse.substring(0, 100),
           });
@@ -182,29 +220,45 @@ export class DingTalkBot {
             timestamp: Date.now(),
           });
 
-          // 限制会话历史长度
           if (conversation!.messages.length > MAX_HISTORY_MESSAGES) {
             conversation!.messages = conversation!.messages.slice(-MAX_HISTORY_MESSAGES);
           }
 
+          // 停止定时器，做最终卡片更新
+          await stopCardUpdater();
           if (outTrackId) {
-            await this.dingtalk.updateCard(conversationId, fullResponse, true);
+            const finalContent = this.truncateCardContent(fullResponse);
+            try {
+              await this.dingtalk.updateCard(conversationId, finalContent, true);
+              logger.info('DingTalk-Bot', 'Card finalized', { conversationId, contentLength: finalContent.length });
+            } catch (e: any) {
+              logger.error('DingTalk-Bot', 'Card finalize failed', { error: e.message });
+            }
           }
         },
         onError: async (error: Error) => {
+          isComplete = true;
+          await stopCardUpdater();
+
           logger.error('DingTalk-Bot', 'Claude Code streaming error', {
             conversationId,
             error: error.message,
           });
 
-          const errorContent = `抱歉，发生了错误: ${error.message}`;
           if (outTrackId) {
-            await this.dingtalk.updateCard(conversationId, errorContent, true);
+            const errorContent = fullResponse
+              ? fullResponse + `\n\n---\n\n❌ **Error**: ${error.message}`
+              : `❌ **Error**: ${error.message}`;
+            try {
+              await this.dingtalk.updateCard(conversationId, this.truncateCardContent(errorContent), true);
+            } catch (e: any) {
+              logger.error('DingTalk-Bot', 'Error card update failed', { error: e.message });
+            }
           }
         },
       }, conversationId);
     } finally {
-      // 基于时间去重，不删除 msgUid
+      // 基于时间去重
     }
   }
 
