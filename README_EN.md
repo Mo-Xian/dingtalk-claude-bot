@@ -1,241 +1,137 @@
 # DingTalk Claude Bot
 
-A DingTalk bot powered by Claude Code CLI. Receives messages via DingTalk's streaming API and responds using Claude Code in real-time.
+Use Claude Code in DingTalk — watch Claude read files, run commands, and edit code in real-time, just like in the terminal.
 
 [中文](./README.md)
 
+## Preview
+
+After sending a message in DingTalk, every step Claude takes is displayed in real-time via interactive cards:
+
+```
+---
+📖 Read `.../src/index.ts`
+
+     1→import express from 'express';
+     2→const app = express();
+     ...
+
+---
+⚡ Bash
+  npm test
+
+  ✓ 12 tests passed
+
+---
+✏️ Edit `.../src/index.ts`
+  - const port = 3000;
+  + const port = parseInt(process.env.PORT || "3000");
+
+✅ The file src/index.ts has been updated successfully.
+
+Changed port configuration to read from environment variable, defaults to 3000.
+
+---
+⏱ 4 turns · 12.3s · $0.083
+```
+
 ## Features
 
-- Real-time streaming responses via DingTalk interactive cards
-- Persistent conversation history within sessions (multi-turn dialogue support)
-- WebSocket long-lived connection for receiving DingTalk messages
-- Support for multiple concurrent conversations (each session has its own Claude process)
-- Message deduplication (handling DingTalk's At-Least-Once delivery semantics)
+- **Full visibility** — Tool calls (Read, Bash, Edit, Write, Grep, etc.) displayed in real-time
+- **Streaming responses** — DingTalk interactive cards update live, no waiting for full response
+- **Multi-turn conversations** — Context maintained via Claude CLI `--session-id`
+- **Concurrent users** — Shared Claude CLI process serves multiple conversations
+- **Message deduplication** — Handles DingTalk's At-Least-Once delivery semantics
+- **Cross-platform** — Supports Windows (Git Bash) and Linux/macOS
 
 ## Prerequisites
 
 - Node.js 18+
 - Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
-- A DingTalk bot application with streaming API enabled
+- A DingTalk bot application with Stream mode enabled
 
 ## Quick Start
 
-1. **Clone the repository**
-   ```bash
-   git clone <your-repo-url>
-   cd dingtalk-claude-bot
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Configure environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your DingTalk credentials:
-   # DINGTALK_CLIENT_ID=your_client_id
-   # DINGTALK_CLIENT_SECRET=your_client_secret
-   ```
-
-4. **Build the project**
-   ```bash
-   npm run build
-   ```
-
-5. **Start the bot**
-   ```bash
-   npm start
-   ```
-
-## How It Works
-
-### Architecture Overview
-
-```
-┌─────────────┐     WebSocket      ┌─────────────┐
-│   DingTalk   │ ←──────────────→  │  DingTalk   │
-│    Client    │   Stream API       │   Client    │
-└─────────────┘                    └──────┬──────┘
-                                          │
-                                          │ handleMessage()
-                                          ▼
-┌─────────────┐     stdin/stdout    ┌──────┴──────┐
-│   Claude    │ ←───────────────→  │  DingTalk   │
-│   Code CLI  │   Streaming JSON    │     Bot     │
-│  (subprocess)│                    └──────┬──────┘
-└─────────────┘                          │
-                                          │ updateCard()
-                                          ▼
-┌─────────────┐     PUT /v1.0/    ┌─────────────┐
-│  DingTalk   │ ←──────────────  │ Card Stream │
-│   Server    │   streaming       │   Update    │
-└─────────────┘                    └─────────────┘
-```
-
-### Message Processing Flow
-
-#### 1. DingTalk WebSocket Long Connection
-
-```
-Bot starts → DWClient.connect() → Establish WebSocket connection
-                                          ↓
-                              Listen on /v1.0/im/bot/messages/get
-                                          ↓
-                            Message received → handleCallback()
-```
-
-- Uses `dingtalk-stream` SDK to establish WebSocket connection
-- Registers callback listener for bot messages
-- Immediately returns `EventAck.SUCCESS` to prevent DingTalk retries
-
-#### 2. Message Deduplication
-
-```typescript
-shouldSkipMessage(msgUid, createAt):
-  if msgUid exists in processingMessages AND time_diff < 2 minutes:
-    return true  // Skip duplicate message
-  else:
-    add to processingMessages
-    return false // Start processing
-```
-
-DingTalk uses At-Least-Once semantics - the same message may be delivered multiple times. Deduplication is done via `msgUid`.
-
-#### 3. Session Management
-
-Each `conversationId` maps to a persistent Claude CLI subprocess:
-
-```
-conversationId (DingTalk format: cidZShXIFb...)
-      ↓ SHA-256 hash
-sessionId (Standard UUID format)
-      ↓
-Claude CLI --session-id={sessionId}
-```
-
-Process reuse strategy:
-- Generate random shared session ID on startup (avoid conflicts with other Claude processes)
-- Create new subprocess on first message for each session
-- Reuse existing subprocess for subsequent messages
-- Claude CLI maintains conversation context via `--session-id`
-
-#### 4. Claude CLI Integration
-
 ```bash
-claude -p --output-format stream-json --input-format stream-json \
-       --session-id {sessionId} --dangerously-skip-permissions
+# 1. Clone the repo
+git clone https://github.com/Mo-Xian/dingtalk-claude-bot.git
+cd dingtalk-claude-bot
+
+# 2. Install dependencies
+npm install
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env with your DingTalk credentials
+
+# 4. Development mode
+npm run dev
+
+# Or build and start
+npm run build && npm start
 ```
 
-**Process Lifecycle:**
-1. On startup, load and kill residual processes from `.claude_sessions` (using `taskkill /T`)
-2. Generate random shared session ID (avoid conflicts with other Claude processes)
-3. Start new process, wait 5 seconds for initialization
-4. Send messages via stdin, receive streaming responses via stdout
-5. Monitor stderr for session conflict errors
-
-**Message Protocol:**
-```typescript
-// Sending
-stdin.write(`{"type":"user","message":{"role":"user","content":"${message}"}}\n`);
-stdin.write('{"type":"result"}\n');  // result marker after 300ms
-
-// Receiving
-{"type":"system","subtype":"init",...}  // Initialization complete
-{"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
-{"type":"result",...}  // Response complete
-{"type":"error","content":"...",...}  // Error occurred
-```
-
-#### 5. Streaming Card Updates
+## Architecture
 
 ```
-User sends message → createStreamCard() → Create interactive card (flowStatus=2 streaming)
-                ↓
-          Every 5 chunks OR chunk < 50 chars
-                ↓
-          updateCard(content, isFinal=false) → PUT /v1.0/card/streaming
-                ↓
-          onComplete()
-                ↓
-          updateCard(content, isFinal=true) → flowStatus=3 (complete)
+┌──────────┐   WebSocket    ┌──────────┐  stdin/stdout  ┌──────────┐
+│ DingTalk │ ←───────────→ │ DingTalk │ ←────────────→ │  Claude  │
+│   User   │  Stream API    │  Client  │  stream-json   │ Code CLI │
+└──────────┘               └────┬─────┘               └──────────┘
+                                │
+                     updateCard() ← real-time per event
+                                │
+                         ┌──────┴─────┐
+                         │  DingTalk  │
+                         │   Card     │
+                         └────────────┘
 ```
 
-Card states:
-- `flowStatus: 2` = streaming (in progress)
-- `flowStatus: 3` = complete (finished)
+### Event Processing
 
-#### 6. Complete Message Flow
+Claude CLI outputs `stream-json` events. The bot parses each event and formats it as Markdown for the card:
 
-```
-1. User sends message to bot in DingTalk
-2. WebSocket receives message → shouldSkipMessage() deduplication check
-3. DingTalkBot.handleMessage():
-   a. Create/get Conversation (saves conversation history)
-   b. Call dingtalk.createStreamCard() to create streaming card
-   c. Call claude.streamMessage() to send message
-4. ClaudeClient.streamMessage():
-   a. Get or create Claude CLI subprocess
-   b. Send message and result marker via stdin
-   c. Parse JSON streaming events from stdout
-5. Receive Claude chunk → dingtalk.updateCard() to update card in real-time
-6. Response complete → updateCard(isFinal=true) to mark card as finished
-7. On shutdown: Mark all sessions as stopping → Wait for processes to exit (3s timeout) → Update file status → Close connections
-```
+| CLI Event | Card Display |
+|-----------|-------------|
+| `assistant` → `tool_use` | 📖 **Read** / ⚡ **Bash** / ✏️ **Edit** + params |
+| `user` → `tool_result` | Tool execution result (truncated) |
+| `assistant` → `text` | Claude's text response |
+| `result` | ⏱ Stats (turns · duration · cost) |
 
 ### Project Structure
 
 ```
 src/
-├── index.ts              # Entry point, server startup and initialization
-├── config.ts             # Environment variables configuration
-├── logger.ts             # Structured logging
+├── index.ts              # Entry point, component wiring, graceful shutdown
+├── config.ts             # Environment variables
+├── logger.ts             # Structured logging (console + file)
 ├── server/
-│   └── express.ts        # HTTP server (health check endpoint)
+│   └── express.ts        # Express health check
 ├── claude/
-│   └── client.ts         # Claude CLI subprocess management, streaming parser
+│   └── client.ts         # Claude CLI process management, event parsing, formatting
 └── dingtalk/
-    ├── bot.ts            # Message routing, conversation state, deduplication
-    ├── client.ts         # WebSocket connection, card API
-    └── card.ts           # Card message templates
+    ├── bot.ts            # Message routing, session management, deduplication
+    └── client.ts         # WebSocket connection, card create/update, token cache
 ```
 
 ### Key Design Decisions
 
-#### Process Isolation
-- Each session has its own Claude CLI subprocess
-- Exit code 1 + stderr containing "already in use" = Session conflict
-- Automatically creates new process on conflict
+**Shared process** — A single Claude CLI subprocess is created on startup and shared across conversations. Falls back to per-conversation processes on session conflicts.
 
-#### Conversation History
-- `DingTalkBot.conversations: Map<conversationId, Conversation>`
-- Each message appends user/assistant records
-- Full history sent to Claude for maintaining context
+**Process lifecycle** — `.claude_sessions` file persists process info. Cleans up residual processes on startup; kills process trees and waits for exit on shutdown.
 
-#### Graceful Shutdown
-1. Receive SIGTERM/SIGINT
-2. Mark all sessions as stopping
-3. Kill Claude process trees using `taskkill /T` (includes child processes)
-4. Wait for processes to exit
-5. Update `.claude_sessions` status to stopped
-6. Close DingTalk WebSocket connection
-7. Close HTTP server
+**Token caching** — Access token cached for 2 hours (refreshed 5 minutes early), preventing rate limits from per-update token requests.
+
+**History cap** — Each conversation retains at most 50 messages to prevent unbounded memory growth. Claude CLI maintains full context via `--session-id`.
 
 ## Configuration
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `DINGTALK_CLIENT_ID` | DingTalk app client ID | Yes |
-| `DINGTALK_CLIENT_SECRET` | DingTalk app client secret | Yes |
+| `DINGTALK_CLIENT_ID` | DingTalk app Client ID | Yes |
+| `DINGTALK_CLIENT_SECRET` | DingTalk app Client Secret | Yes |
 | `DINGTALK_CARD_TEMPLATE_ID` | DingTalk card template ID | No |
 | `PORT` | Server port (default 3000) | No |
-
-## Development
-
-```bash
-npm run dev  # Run with hot-reload using tsx watch
-```
 
 ## License
 

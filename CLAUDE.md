@@ -4,44 +4,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a DingTalk (钉钉) bot that integrates with Claude Code. It receives messages via DingTalk's streaming API and responds using Claude Code CLI, displaying responses in real-time via DingTalk interactive cards.
+DingTalk bot that integrates with Claude Code CLI. Receives messages via DingTalk's streaming WebSocket API, forwards them to a locally running Claude Code CLI subprocess, and streams back **all events** (tool calls, tool results, text responses) as formatted Markdown in DingTalk interactive cards.
 
 ## Commands
 
 ```bash
-npm run dev    # Run development server with hot-reload (tsx watch)
+npm run dev    # Development with hot-reload (tsx watch)
 npm run build  # Compile TypeScript to dist/
-npm start      # Run production server from dist/
+npm start      # Production server from dist/
 ```
 
 ## Architecture
 
 ```
-src/index.ts              # Entry point - wires up all components
-src/server/express.ts      # Express server (health check + webhook)
-src/dingtalk/bot.ts        # DingTalkBot - message routing & conversation state
-src/dingtalk/client.ts      # DingTalkClient - stream connection & card API
-src/dingtalk/card.ts       # CardMessage - card payload templates
-src/claude/client.ts       # ClaudeClient - spawns claude CLI with streaming
-src/config.ts              # Environment variables (DINGTALK_CLIENT_ID, etc.)
-src/logger.ts              # Structured logger with level filtering
+src/index.ts              # Entry point - wires up components, graceful shutdown
+src/server/express.ts      # Express health check endpoint
+src/dingtalk/bot.ts        # DingTalkBot - message routing, conversation state, dedup
+src/dingtalk/client.ts      # DingTalkClient - WebSocket stream, card API, token cache
+src/claude/client.ts       # ClaudeClient - process management, event parsing, formatting
+src/config.ts              # Environment variables
+src/logger.ts              # Structured logger (console + file)
 ```
 
 ## Key Design Patterns
 
-**Message Flow**: DingTalk → DingTalkClient → DingTalkBot → ClaudeClient → Claude CLI → streaming response → DingTalk card update
+**Event Pipeline**: DingTalk WebSocket → DingTalkClient → DingTalkBot → ClaudeClient → Claude CLI subprocess → stream-json events → format as Markdown → DingTalk card update
 
-**Conversation State**: `DingTalkBot` maintains in-memory `Map<string, Conversation>` keyed by `conversationId`. Each conversation stores message history for context.
+**Full Event Streaming**: All Claude CLI events are processed and displayed:
+- `assistant(tool_use)` → formatted tool call with icon + params (Read, Bash, Edit diffs, etc.)
+- `user(tool_result)` → tool execution result (truncated at 25 lines / 1500 chars)
+- `assistant(text)` → Claude's text response (pass-through)
+- `result` → completion stats (turns, duration, cost)
 
-**Claude Integration**: `ClaudeClient.streamMessage()` spawns `claude -p --output-format stream-json` as a child process, parses streaming JSON events, and calls callbacks for each text chunk.
+**Shared Process**: Single Claude CLI subprocess created on startup, shared across all conversations. Falls back to per-conversation processes on session conflicts.
 
-**Card Streaming**: Uses DingTalk's `card/instances/createAndDeliver` API with `callbackType: STREAM`. Updates via `PUT /v1.0/im/interactiveCards` as chunks arrive. `flowStatus: 2` = streaming, `flowStatus: 3` = complete.
+**Token Caching**: DingTalk access token cached for 2 hours (refreshed 5 min early) to avoid rate limiting.
 
-**Duplicate Prevention**: `processingMessages` Set tracks `msgUid` to skip duplicate deliveries from DingTalk's at-least-once semantics.
+**Session Management**: Claude CLI `--session-id` maintains conversation context. Bot only sends the latest message (not full history) since CLI preserves state internally.
+
+**Deduplication**: `processingMessages` Map tracks `msgUid` with 2-minute TTL, cleaned up every 5 minutes.
+
+**History Cap**: In-memory conversation history capped at 50 messages per conversation.
 
 ## Configuration
 
 Environment variables (see `.env.example`):
-- `DINGTALK_CLIENT_ID` - DingTalk app client ID
-- `DINGTALK_CLIENT_SECRET` - DingTalk app client secret
+- `DINGTALK_CLIENT_ID` - DingTalk app client ID (required)
+- `DINGTALK_CLIENT_SECRET` - DingTalk app client secret (required)
+- `DINGTALK_CARD_TEMPLATE_ID` - DingTalk card template ID (optional)
 - `PORT` - Server port (default 3000)
