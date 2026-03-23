@@ -20,7 +20,7 @@ export class DingTalkClient {
   private clientSecret: string;
   private bot?: DingTalkBot;
   private dwClient?: DWClient;
-  private cardInstances: Map<string, { outTrackId: string; guid: string }> = new Map();
+  private cardInstances: Map<string, { outTrackId: string; updateSeq: number }> = new Map();
 
   constructor(options: StreamClientOptions) {
     this.clientId = options.botToken;
@@ -191,10 +191,9 @@ export class DingTalkClient {
     if (!accessToken) return null;
 
     const outTrackId = `claude_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-    const guid = `claude_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     const spaceId = `dtv1.card//im_robot.${senderStaffId}`;
 
-    logger.info('DingTalk-Client', 'Creating stream card', { outTrackId, guid, spaceId });
+    logger.info('DingTalk-Client', 'Creating stream card', { outTrackId, spaceId });
 
     try {
       const response = await axios.post(
@@ -231,7 +230,7 @@ export class DingTalkClient {
 
       logger.info('DingTalk-Client', 'Card created', { result: JSON.stringify(response.data).substring(0, 200) });
 
-      this.cardInstances.set(conversationId, { outTrackId, guid });
+      this.cardInstances.set(conversationId, { outTrackId, updateSeq: 0 });
 
       return outTrackId;
     } catch (error: any) {
@@ -255,11 +254,15 @@ export class DingTalkClient {
       return;
     }
 
-    const { outTrackId, guid } = cardInfo;
+    // 每次更新生成唯一 guid，钉钉会把相同 guid 的请求当重复请求忽略
+    cardInfo.updateSeq++;
+    const guid = `${cardInfo.outTrackId}_${cardInfo.updateSeq}`;
+    const { outTrackId } = cardInfo;
 
     logger.info('DingTalk-Client', 'Streaming card update', {
       outTrackId,
       guid,
+      seq: cardInfo.updateSeq,
       contentLength: content.length,
       isFinal,
     });
