@@ -191,17 +191,40 @@ export class DingTalkClient {
     }
   }
 
-  // 创建流式 AI 卡片
-  async createStreamCard(conversationId: string, robotCode: string, senderStaffId: string, query: string = ''): Promise<string | null> {
+  // 创建流式 AI 卡片（支持单聊和群聊）
+  async createStreamCard(conversationId: string, robotCode: string, senderStaffId: string, query: string = '', conversationType: string = '1'): Promise<string | null> {
     const accessToken = await this.getAccessToken();
     if (!accessToken) return null;
 
     const outTrackId = `claude_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-    const spaceId = `dtv1.card//im_robot.${senderStaffId}`;
+    const isGroup = conversationType === '2';
+    const spaceId = isGroup
+      ? `dtv1.card//IM_GROUP.${conversationId}`
+      : `dtv1.card//im_robot.${senderStaffId}`;
 
-    logger.info('DingTalk-Client', 'Creating stream card', { outTrackId, spaceId });
+    logger.info('DingTalk-Client', 'Creating stream card', { outTrackId, spaceId, conversationType });
 
     try {
+      // 根据会话类型构建不同的投递模型
+      const deliverModel = isGroup
+        ? {
+            imGroupOpenDeliverModel: {
+              robotCode: robotCode,
+            },
+            imGroupOpenSpaceModel: {
+              supportForward: true,
+            },
+          }
+        : {
+            imRobotOpenDeliverModel: {
+              spaceType: 'IM_ROBOT',
+              robotCode: robotCode,
+            },
+            imRobotOpenSpaceModel: {
+              supportForward: true,
+            },
+          };
+
       const response = await axios.post(
         'https://api.dingtalk.com/v1.0/card/instances/createAndDeliver',
         {
@@ -212,13 +235,7 @@ export class DingTalkClient {
           callbackType: 'STREAM',
           openSpaceId: spaceId,
           robotCode: robotCode,
-          imRobotOpenDeliverModel: {
-            spaceType: 'IM_ROBOT',
-            robotCode: robotCode
-          },
-          imRobotOpenSpaceModel: {
-            supportForward: true
-          },
+          ...deliverModel,
           cardData: {
             cardParamMap: {
               content: '# 正在思考...',

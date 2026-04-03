@@ -144,7 +144,7 @@ export class DingTalkBot {
       let outTrackId: string | undefined = undefined;
       if (senderStaffId && robotCode) {
         logger.info('DingTalk-Bot', 'Creating stream card', { conversationId, senderStaffId });
-        const newOutTrackId = await this.dingtalk.createStreamCard(conversationId, robotCode, senderStaffId, text);
+        const newOutTrackId = await this.dingtalk.createStreamCard(conversationId, robotCode, senderStaffId, text, conversationType || '1');
         if (newOutTrackId) {
           outTrackId = newOutTrackId;
           conversation.outTrackId = newOutTrackId;
@@ -208,7 +208,7 @@ export class DingTalkBot {
           cardPartIndex++;
           const newOutTrackId = await this.dingtalk.createStreamCard(
             conversationId, robotCode, senderStaffId,
-            `(Part ${cardPartIndex + 1})`
+            `(Part ${cardPartIndex + 1})`, conversationType || '1'
           );
           if (newOutTrackId) {
             outTrackId = newOutTrackId;
