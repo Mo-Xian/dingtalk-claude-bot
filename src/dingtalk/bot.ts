@@ -107,6 +107,15 @@ export class DingTalkBot {
     robotCode?: string,
     conversationType?: string
   ) {
+    logger.info('DingTalk-Bot', '[handleMessage] Start', {
+      conversationId,
+      conversationType,
+      senderNick,
+      senderStaffId,
+      robotCode,
+      sessionWebhookAvailable: !!sessionWebhook,
+    });
+
     logger.info('DingTalk-Bot', '=== New Message Received ===', {
       conversationId,
       senderNick,
@@ -143,13 +152,22 @@ export class DingTalkBot {
       // 创建流式 AI 卡片
       let outTrackId: string | undefined = undefined;
       if (senderStaffId && robotCode) {
-        logger.info('DingTalk-Bot', 'Creating stream card', { conversationId, senderStaffId });
-        const newOutTrackId = await this.dingtalk.createStreamCard(conversationId, robotCode, senderStaffId, text);
+        logger.info('DingTalk-Bot', '[handleMessage] Creating stream card', { conversationId, senderStaffId, conversationType, robotCode });
+        const newOutTrackId = await this.dingtalk.createStreamCard(conversationId, robotCode, senderStaffId, text, conversationType);
         if (newOutTrackId) {
           outTrackId = newOutTrackId;
           conversation.outTrackId = newOutTrackId;
-          logger.info('DingTalk-Bot', 'Stream card created', { conversationId, outTrackId });
+          logger.info('DingTalk-Bot', '[handleMessage] Stream card created', { conversationId, outTrackId });
+        } else {
+          logger.warn('DingTalk-Bot', '[handleMessage] Stream card creation failed', { conversationId, conversationType });
         }
+      } else {
+        logger.warn('DingTalk-Bot', '[handleMessage] Skipping card creation', {
+          conversationId,
+          hasSenderStaffId: !!senderStaffId,
+          hasRobotCode: !!robotCode,
+          conversationType
+        });
       }
 
       // Write context file for MCP tools (e.g. dingtalk_send_image)
@@ -208,7 +226,8 @@ export class DingTalkBot {
           cardPartIndex++;
           const newOutTrackId = await this.dingtalk.createStreamCard(
             conversationId, robotCode, senderStaffId,
-            `(Part ${cardPartIndex + 1})`
+            `(Part ${cardPartIndex + 1})`,
+            conversationType
           );
           if (newOutTrackId) {
             outTrackId = newOutTrackId;
