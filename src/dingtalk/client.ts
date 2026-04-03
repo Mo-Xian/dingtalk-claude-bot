@@ -193,13 +193,8 @@ export class DingTalkClient {
 
   // 创建流式 AI 卡片
   async createStreamCard(conversationId: string, robotCode: string, senderStaffId: string, query: string = '', conversationType: string = '1'): Promise<string | null> {
-    logger.info('DingTalk-Client', '[createStreamCard] Start', { conversationId, robotCode, senderStaffId, conversationType });
-
     const accessToken = await this.getAccessToken();
-    if (!accessToken) {
-      logger.error('DingTalk-Client', '[createStreamCard] Failed to get access token');
-      return null;
-    }
+    if (!accessToken) return null;
 
     const outTrackId = `claude_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
@@ -213,7 +208,7 @@ export class DingTalkClient {
       spaceId = `dtv1.card//IM_GROUP.${conversationId}`;
     }
 
-    logger.info('DingTalk-Client', '[createStreamCard] Creating stream card', { outTrackId, spaceId, conversationType });
+    logger.info('DingTalk-Client', 'Creating stream card', { outTrackId, spaceId, conversationType });
 
     try {
       // 根据单聊/群聊构造不同的请求参数
@@ -261,8 +256,6 @@ export class DingTalkClient {
         };
       }
 
-      logger.info('DingTalk-Client', '[createStreamCard] Request payload', { cardData: JSON.stringify(cardData) });
-
       const response = await axios.post(
         'https://api.dingtalk.com/v1.0/card/instances/createAndDeliver',
         cardData,
@@ -274,10 +267,7 @@ export class DingTalkClient {
         }
       );
 
-      logger.info('DingTalk-Client', '[createStreamCard] Response', {
-        status: response.status,
-        data: JSON.stringify(response.data)
-      });
+      logger.info('DingTalk-Client', 'Card created', { result: JSON.stringify(response.data).substring(0, 200) });
 
       this.cardInstances.set(conversationId, { outTrackId, updateSeq: 0 });
 
@@ -294,17 +284,12 @@ export class DingTalkClient {
 
   // 更新 AI 卡片内容 - 使用流式更新接口
   async updateCard(conversationId: string, content: string, isFinal: boolean): Promise<void> {
-    logger.info('DingTalk-Client', '[updateCard] Start', { conversationId, isFinal, contentLength: content.length });
-
     const accessToken = await this.getAccessToken();
-    if (!accessToken) {
-      logger.error('DingTalk-Client', '[updateCard] Failed to get access token');
-      return;
-    }
+    if (!accessToken) return;
 
     const cardInfo = this.cardInstances.get(conversationId);
     if (!cardInfo) {
-      logger.warn('DingTalk-Client', '[updateCard] No card instance found', { conversationId });
+      logger.warn('DingTalk-Client', 'No card instance found for conversation', { conversationId });
       return;
     }
 
@@ -313,7 +298,7 @@ export class DingTalkClient {
     const guid = `${cardInfo.outTrackId}_${cardInfo.updateSeq}`;
     const { outTrackId } = cardInfo;
 
-    logger.info('DingTalk-Client', '[updateCard] Streaming card update', {
+    logger.info('DingTalk-Client', 'Streaming card update', {
       outTrackId,
       guid,
       seq: cardInfo.updateSeq,

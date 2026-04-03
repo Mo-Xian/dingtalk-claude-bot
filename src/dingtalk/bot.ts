@@ -107,15 +107,6 @@ export class DingTalkBot {
     robotCode?: string,
     conversationType?: string
   ) {
-    logger.info('DingTalk-Bot', '[handleMessage] Start', {
-      conversationId,
-      conversationType,
-      senderNick,
-      senderStaffId,
-      robotCode,
-      sessionWebhookAvailable: !!sessionWebhook,
-    });
-
     logger.info('DingTalk-Bot', '=== New Message Received ===', {
       conversationId,
       senderNick,
@@ -152,22 +143,13 @@ export class DingTalkBot {
       // 创建流式 AI 卡片
       let outTrackId: string | undefined = undefined;
       if (senderStaffId && robotCode) {
-        logger.info('DingTalk-Bot', '[handleMessage] Creating stream card', { conversationId, senderStaffId, conversationType, robotCode });
+        logger.info('DingTalk-Bot', 'Creating stream card', { conversationId, senderStaffId, conversationType });
         const newOutTrackId = await this.dingtalk.createStreamCard(conversationId, robotCode, senderStaffId, text, conversationType);
         if (newOutTrackId) {
           outTrackId = newOutTrackId;
           conversation.outTrackId = newOutTrackId;
-          logger.info('DingTalk-Bot', '[handleMessage] Stream card created', { conversationId, outTrackId });
-        } else {
-          logger.warn('DingTalk-Bot', '[handleMessage] Stream card creation failed', { conversationId, conversationType });
+          logger.info('DingTalk-Bot', 'Stream card created', { conversationId, outTrackId });
         }
-      } else {
-        logger.warn('DingTalk-Bot', '[handleMessage] Skipping card creation', {
-          conversationId,
-          hasSenderStaffId: !!senderStaffId,
-          hasRobotCode: !!robotCode,
-          conversationType
-        });
       }
 
       // Write context file for MCP tools (e.g. dingtalk_send_image)
