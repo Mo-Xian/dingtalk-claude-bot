@@ -11,7 +11,7 @@
  *   node dist/claude/proxy.js <processName> <sessionId>
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execSync } from 'child_process';
 import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -45,6 +45,17 @@ const MAX_RESTART_RETRIES = 5;
 const BASE_RESTART_DELAY = 3000; // 3s, 6s, 12s, 24s, 48s
 let restartCount = 0;
 let lastSuccessTime = 0;
+// 检查 session 文件是否已存在（Claude CLI 用文件判断 session 是否 "in use"）
+function sessionFileExists(): boolean {
+  // Claude CLI 的 session 文件路径：~/.claude/projects/<projectDir>/<sessionId>.jsonl
+  // projectDir 由 cwd 决定，格式为路径中的分隔符替换为 '-'
+  const homeDir = os.homedir();
+  const cwd = process.cwd().replace(/[:\\\/]/g, '-');
+  const sessionFile = path.join(homeDir, '.claude', 'projects', cwd, `${sessionId}.jsonl`);
+  const exists = fs.existsSync(sessionFile);
+  log(`Session file check: ${sessionFile} → ${exists ? 'EXISTS (will use --resume)' : 'NOT FOUND (will use --session-id)'}`);
+  return exists;
+}
 
 function startClaude() {
   if (shuttingDown) return;
@@ -55,9 +66,14 @@ function startClaude() {
   }
 
   const isWindows = os.platform() === 'win32';
+  // 如果 session 文件已存在，用 --resume 恢复；否则用 --session-id 创建新 session
+  const useResume = sessionFileExists();
+  const sessionArgs = useResume
+    ? ['--resume', sessionId]
+    : ['--session-id', sessionId];
   const claudeArgs = [
     '-p', '--output-format', 'stream-json', '--input-format', 'stream-json',
-    '--verbose', '--session-id', sessionId, '--dangerously-skip-permissions',
+    '--verbose', ...sessionArgs, '--dangerously-skip-permissions',
   ];
 
   log(`Starting Claude CLI: session=${sessionId} (attempt ${restartCount + 1}/${MAX_RESTART_RETRIES})`);
@@ -218,14 +234,24 @@ function cleanup() {
     currentClient.destroy();
   }
 
-  if (claude) {
-    claude.kill('SIGTERM');
-    // Force kill after 3 seconds
-    setTimeout(() => {
-      if (claude) {
-        claude.kill('SIGKILL');
+  if (claude && claude.pid) {
+    if (os.platform() === 'win32') {
+      // Windows: taskkill /T 杀掉整个进程树（bash → claude.exe）
+      try {
+        execSync(`taskkill /PID ${claude.pid} /T /F`, { timeout: 5000 });
+        log(`Killed Claude CLI process tree: PID=${claude.pid}`);
+      } catch (e: any) {
+        log(`taskkill failed: ${e.message}`);
       }
-    }, 3000);
+    } else {
+      claude.kill('SIGTERM');
+      // Force kill after 3 seconds
+      setTimeout(() => {
+        if (claude) {
+          claude.kill('SIGKILL');
+        }
+      }, 3000);
+    }
   }
 
   try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
