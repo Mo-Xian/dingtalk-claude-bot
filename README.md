@@ -40,7 +40,8 @@
 - **完整操作可见** — 工具调用（Read、Bash、Edit、Write、Grep 等）实时展示在钉钉卡片中
 - **流式响应** — 通过钉钉互动卡片实时更新，无需等待完整响应
 - **多卡片分页** — 长任务输出自动拆分为多张卡片，内容不丢失
-- **多轮对话** — 基于固定 Session ID 保持上下文，Bot 重启后对话可续接
+- **单聊 + 群聊** — 支持 1:1 私聊和群内 @机器人，自动适配卡片投递模型
+- **多轮对话** — 基于固定 Session ID 保持上下文，Bot 重启后通过 `--resume` 自动续接
 - **Proxy 架构** — Claude CLI 进程独立于 Bot，Bot 重启不影响 Claude CLI
 - **图片支持** — 自动检测 Claude 工具产生的图片文件并发送到钉钉
 - **消息去重** — 应对钉钉 At-Least-Once 投递语义
@@ -130,11 +131,17 @@ src/
 
 **自动重启** — Proxy 在 Claude CLI 崩溃后自动重启（指数退避，最多 5 次）。成功初始化后重置计数器。
 
+**Session 恢复** — 首次启动用 `--session-id` 创建新会话；后续重启自动检测已有 session 文件并用 `--resume` 恢复，避免 "Session ID already in use" 冲突。
+
+**进程树清理** — Windows 上退出时使用 `taskkill /T /F` 杀掉整个进程树（bash → claude.exe），防止孤儿进程残留。
+
 **多卡片分页** — 当单张卡片内容超过阈值时，自动 finalize 当前卡片并创建新卡片继续输出，长任务内容不丢失。
+
+**群聊支持** — 自动识别会话类型（单聊 `conversationType=1` / 群聊 `conversationType=2`），使用对应的卡片投递模型和 spaceId。群聊中 @机器人 即可触发。
 
 **Token 缓存** — Access Token 缓存 2 小时（提前 5 分钟刷新），避免每次卡片更新都请求新 Token。
 
-**会话历史上限** — 每个会话最多保留 50 条消息，防止内存无限增长。Claude CLI 通过 `--session-id` 自行维护完整上下文。
+**会话历史上限** — 每个会话最多保留 50 条消息，防止内存无限增长。Claude CLI 通过 `--session-id` / `--resume` 自行维护完整上下文。
 
 ## 配置项
 
