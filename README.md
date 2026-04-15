@@ -44,7 +44,9 @@
 - **会话隔离** — 每个会话（单聊/群聊）独立 Claude CLI 实例，上下文互不泄漏
 - **多轮对话** — 基于 Session ID 保持上下文，Bot 重启后通过 `--resume` 自动续接
 - **Proxy 架构** — Claude CLI 进程独立于 Bot，Bot 重启不影响 Claude CLI
-- **图片支持** — 自动检测 Claude 工具产生的图片文件并发送到钉钉
+- **图片识别** — 支持接收钉钉图片/图文混合消息，自动下载并交给 Claude 分析（多模态 Read 或 MCP 工具）
+- **图片发送** — 自动检测 Claude 工具产生的图片文件并发送到钉钉
+- **`/new` 命令** — 发送 `/new` 可完全重置当前会话（杀 Proxy、清 Session、清历史），解决上下文污染问题
 - **消息去重** — 应对钉钉 At-Least-Once 投递语义
 - **跨平台** — 支持 Windows（Git Bash）和 Linux/macOS
 
@@ -145,6 +147,10 @@ src/
 **Token 缓存** — Access Token 缓存 2 小时（提前 5 分钟刷新），避免每次卡片更新都请求新 Token。
 
 **会话历史上限** — 每个会话最多保留 50 条消息，防止内存无限增长。Claude CLI 通过 `--session-id` / `--resume` 自行维护完整上下文。
+
+**图片识别** — 支持 `picture` 和 `richText` 消息类型。收到图片后通过钉钉 Robot messageFiles API 下载到本地临时目录，再将路径传给 Claude CLI。Claude 自行选择合适的方式分析图片（多模态模型用 Read 工具直接读取，非多模态模型通过 MCP 工具理解）。
+
+**`/new` 会话重置** — 发送 `/new` 完全重置当前会话：通过 PID 文件杀掉 Proxy 进程（即使 Bot 重启后内存无 Client 记录也能生效）、删除 Claude Session 文件、清除内存对话历史。下次发消息时自动创建全新的 Proxy + Session。
 
 ## 配置项
 
