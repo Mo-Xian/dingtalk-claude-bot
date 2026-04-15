@@ -1,5 +1,6 @@
 import axios from 'axios';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import FormData from 'form-data';
 import { DWClient, EventAck, type DWClientDownStream } from 'dingtalk-stream';
@@ -161,6 +162,28 @@ export class DingTalkClient {
         ).catch((err) => {
           logger.error('DingTalk-Client', 'Handle message error', { error: err.message });
         });
+      } else if (msgType === 'picture') {
+        const downloadCode = data.content?.downloadCode;
+        if (downloadCode && robotCode) {
+          this.handleImageMessage(
+            conversationId, senderNick, downloadCode, robotCode,
+            msgUid, senderStaffId, sessionWebhook, conversationType
+          ).catch((err) => {
+            logger.error('DingTalk-Client', 'Handle image message error', { error: err.message });
+          });
+        } else {
+          logger.warn('DingTalk-Client', 'Picture message missing downloadCode or robotCode', { downloadCode, robotCode });
+        }
+      } else if (msgType === 'richText') {
+        const richTextParts = data.content?.richText;
+        if (Array.isArray(richTextParts) && robotCode) {
+          this.handleRichTextMessage(
+            conversationId, senderNick, richTextParts, robotCode,
+            msgUid, senderStaffId, sessionWebhook, conversationType
+          ).catch((err) => {
+            logger.error('DingTalk-Client', 'Handle richText message error', { error: err.message });
+          });
+        }
       }
     } catch (error) {
       logger.error('DingTalk-Client', 'Error handling callback', { error });
@@ -347,6 +370,136 @@ export class DingTalkClient {
         status: error.response?.status,
       });
     }
+  }
+
+  // 下载机器人接收到的图片文件（两步：获取 downloadUrl → 下载二进制）
+  async downloadMessageImage(downloadCode: string, robotCode: string): Promise<string | null> {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return null;
+
+    try {
+      // Step 1: 获取下载 URL
+      const urlResponse = await axios.post(
+        'https://api.dingtalk.com/v1.0/robot/messageFiles/download',
+        { downloadCode, robotCode },
+        {
+          headers: {
+            'x-acs-dingtalk-access-token': accessToken,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const downloadUrl = urlResponse.data?.downloadUrl;
+      if (!downloadUrl) {
+        logger.error('DingTalk-Client', 'No downloadUrl in response', { data: JSON.stringify(urlResponse.data).substring(0, 500) });
+        return null;
+      }
+
+      logger.info('DingTalk-Client', 'Got image download URL', { downloadUrl: downloadUrl.substring(0, 100) });
+
+      // Step 2: 下载图片二进制
+      const imgResponse = await axios.get(downloadUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+      });
+
+      // 从 Content-Type 推断扩展名
+      const contentType = imgResponse.headers['content-type'] || '';
+      let ext = '.png';
+      if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = '.jpg';
+      else if (contentType.includes('gif')) ext = '.gif';
+      else if (contentType.includes('webp')) ext = '.webp';
+      else if (contentType.includes('bmp')) ext = '.bmp';
+
+      // 保存到临时文件
+      const tmpDir = path.join(os.tmpdir(), 'dingtalk-images');
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+
+      const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+      const filePath = path.join(tmpDir, fileName);
+      fs.writeFileSync(filePath, Buffer.from(imgResponse.data));
+
+      logger.info('DingTalk-Client', 'Image downloaded', { filePath, size: imgResponse.data.byteLength, contentType });
+      return filePath;
+    } catch (error: any) {
+      logger.error('DingTalk-Client', 'Failed to download image', {
+        error: error.message,
+        status: error.response?.status,
+        data: error.response?.data ? JSON.stringify(error.response.data).substring(0, 500) : undefined,
+      });
+      return null;
+    }
+  }
+
+  // 处理图片消息
+  private async handleImageMessage(
+    conversationId: string, senderNick: string, downloadCode: string, robotCode: string,
+    msgUid?: string, senderStaffId?: string, sessionWebhook?: string, conversationType?: string
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    logger.info('DingTalk-Client', 'Processing image message', { conversationId, senderNick });
+
+    const filePath = await this.downloadMessageImage(downloadCode, robotCode);
+    if (!filePath) {
+      logger.error('DingTalk-Client', 'Failed to download image, skipping');
+      return;
+    }
+
+    // 构造消息，让 Claude 自行决定用 Read 或 MCP 工具查看图片
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    const text = `用户发送了一张图片，图片文件路径: ${normalizedPath}\n请读取这个图片文件并描述图片内容。`;
+    this.bot.handleMessage(
+      conversationId, senderNick, text,
+      msgUid, senderStaffId, sessionWebhook, robotCode, conversationType
+    ).catch((err) => {
+      logger.error('DingTalk-Client', 'Handle image message error', { error: err.message });
+    });
+  }
+
+  // 处理富文本消息（图文混合）
+  private async handleRichTextMessage(
+    conversationId: string, senderNick: string, richText: any[], robotCode: string,
+    msgUid?: string, senderStaffId?: string, sessionWebhook?: string, conversationType?: string
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    logger.info('DingTalk-Client', 'Processing richText message', { conversationId, parts: richText.length });
+
+    const textParts: string[] = [];
+    const imagePaths: string[] = [];
+
+    for (const part of richText) {
+      if (part.text) {
+        textParts.push(part.text);
+      } else if (part.downloadCode && part.type === 'picture') {
+        const filePath = await this.downloadMessageImage(part.downloadCode, robotCode);
+        if (filePath) {
+          imagePaths.push(filePath);
+        }
+      }
+    }
+
+    let text = textParts.join('');
+    if (imagePaths.length > 0) {
+      const imageInfo = imagePaths.map(p => `  - ${p}`).join('\n');
+      text += `\n[用户同时发送了 ${imagePaths.length} 张图片，已保存到以下路径，请查看并分析：\n${imageInfo}]`;
+    }
+
+    if (!text.trim()) {
+      logger.warn('DingTalk-Client', 'RichText message has no content after processing');
+      return;
+    }
+
+    this.bot.handleMessage(
+      conversationId, senderNick, text,
+      msgUid, senderStaffId, sessionWebhook, robotCode, conversationType
+    ).catch((err) => {
+      logger.error('DingTalk-Client', 'Handle richText message error', { error: err.message });
+    });
   }
 
   // 上传媒体文件到钉钉，返回 mediaId

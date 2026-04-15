@@ -3,6 +3,8 @@ import { ClaudeClient } from '../claude/client.js';
 import { createHash } from 'crypto';
 import { logger } from '../logger.js';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
+import * as os from 'os';
 import * as path from 'path';
 
 const MAX_HISTORY_MESSAGES = 50;
@@ -201,6 +203,12 @@ export class DingTalkBot {
     });
 
     try {
+      // /new 命令：重置 session，开启全新对话
+      if (text.trim() === '/new') {
+        await this.resetSession(conversationId, senderStaffId, robotCode, conversationType);
+        return;
+      }
+
       let conversation = this.conversations.get(conversationId);
       if (!conversation) {
         logger.info('DingTalk-Bot', 'Creating new conversation', { conversationId });
@@ -461,6 +469,91 @@ export class DingTalkBot {
       }, conversationId);
     } finally {
       // 基于时间去重
+    }
+  }
+
+  /**
+   * /new 命令：停掉旧 proxy + 删除 session 文件 + 清内存，实现完全重置
+   */
+  private async resetSession(
+    conversationId: string,
+    senderStaffId?: string,
+    robotCode?: string,
+    conversationType?: string
+  ): Promise<void> {
+    const processName = this.getProcessName(conversationId);
+    logger.info('DingTalk-Bot', '/new command: resetting session', { conversationId, processName });
+
+    // 1. 停掉旧 proxy — 先尝试内存中的 client，再通过 PID 文件兜底
+    const entry = this.claudeClients.get(conversationId);
+    if (entry) {
+      entry.client.stopProxy();
+      this.claudeClients.delete(conversationId);
+    } else {
+      // bot 重启后内存无 client，直接通过 PID 文件杀 proxy
+      this.killProxyByPidFile(processName);
+    }
+
+    // 2. 删除 session 文件，防止 --resume 恢复旧上下文
+    const sessionId = createHash('sha256').update(processName).digest('hex');
+    const formattedSessionId = `${sessionId.substring(0, 8)}-${sessionId.substring(8, 12)}-4${sessionId.substring(13, 16)}-${sessionId.substring(16, 20)}-${sessionId.substring(20, 32)}`;
+    const cwd = process.cwd().replace(/[:\\/]/g, '-');
+    const sessionDir = path.join(os.homedir(), '.claude', 'projects', cwd);
+
+    // 删除 session 相关文件（.jsonl 和可能的其他文件）
+    try {
+      const sessionPrefix = formattedSessionId;
+      if (fs.existsSync(sessionDir)) {
+        for (const file of fs.readdirSync(sessionDir)) {
+          if (file.startsWith(sessionPrefix)) {
+            const fp = path.join(sessionDir, file);
+            fs.unlinkSync(fp);
+            logger.info('DingTalk-Bot', 'Session file deleted', { file: fp });
+          }
+        }
+      }
+    } catch (e: any) {
+      logger.warn('DingTalk-Bot', 'Failed to delete session files', { error: e.message });
+    }
+
+    // 3. 清内存对话历史
+    this.conversations.delete(conversationId);
+
+    // 4. 回复确认
+    if (senderStaffId && robotCode) {
+      const outTrackId = await this.dingtalk.createStreamCard(
+        conversationId, robotCode, senderStaffId, '/new', conversationType || '1'
+      );
+      if (outTrackId) {
+        await this.dingtalk.updateCard(conversationId, '✅ 会话已重置，开始全新对话。', true);
+      }
+    }
+
+    logger.info('DingTalk-Bot', 'Session reset complete', { conversationId });
+  }
+
+  /**
+   * 通过 PID 文件杀掉 proxy 进程（用于 bot 重启后内存无 client 的情况）
+   */
+  private killProxyByPidFile(processName: string): void {
+    const pidFile = path.join(os.tmpdir(), `claude-proxy-${processName}.pid`);
+    try {
+      if (!fs.existsSync(pidFile)) {
+        logger.info('DingTalk-Bot', 'No PID file found, proxy may not be running', { pidFile });
+        return;
+      }
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim());
+      if (isNaN(pid)) return;
+
+      if (os.platform() === 'win32') {
+        execSync(`taskkill /PID ${pid} /T /F`, { timeout: 5000 });
+      } else {
+        process.kill(pid, 'SIGTERM');
+      }
+      logger.info('DingTalk-Bot', 'Proxy killed via PID file', { processName, pid });
+      fs.unlinkSync(pidFile);
+    } catch (e: any) {
+      logger.debug('DingTalk-Bot', 'killProxyByPidFile error (may already be stopped)', { error: e.message });
     }
   }
 
